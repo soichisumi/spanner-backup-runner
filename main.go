@@ -72,7 +72,7 @@ type PubSubMessage struct {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
-	_ := r.Body // discard request body
+	_ = r.Body // discard request body
 
 	targetDatabaseIDs, err := spannerutil.ListTargetDatabases(spannerService, ignoreDatabaseRegex)
 	if err != nil {
