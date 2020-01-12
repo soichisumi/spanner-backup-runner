@@ -4,12 +4,14 @@ go 1.12
 
 require (
 	github.com/creack/pty v1.1.9 // indirect
+	github.com/jessevdk/go-flags v1.4.0 // indirect
 	github.com/joho/godotenv v1.3.0 // indirect
 	github.com/kelseyhightower/envconfig v1.4.0 // indirect
 	github.com/kr/pretty v0.2.0 // indirect
 	github.com/kr/pty v1.1.8 // indirect
+	github.com/pkg/errors v0.9.0 // indirect
 	github.com/rogpeppe/go-internal v1.5.1 // indirect
-	github.com/soichisumi/go-util v0.0.0-20200112121735-efd850b70fbe // indirect
+	github.com/soichisumi/go-util v0.0.0-20200112171002-778684c4ce3d // indirect
 	github.com/stretchr/objx v0.2.0 // indirect
 	go.uber.org/atomic v1.5.1 // indirect
 	go.uber.org/multierr v1.4.0 // indirect
