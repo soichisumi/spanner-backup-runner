@@ -1,66 +1,104 @@
-package spanner_backup_runner
+package main
 
 import (
 	"context"
+	_ "encoding/json"
+	"log"
+	"net/http"
+	"os"
+	"regexp"
+
+	"github.com/joho/godotenv"
+	"github.com/kelseyhightower/envconfig"
+	"github.com/soichisumi/go-util/logger"
+	"github.com/soichisumi/spanner-backup-runner/pkg/dataflowutil"
+	"github.com/soichisumi/spanner-backup-runner/pkg/spannerutil"
+	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 	dataflow "google.golang.org/api/dataflow/v1b3"
-	"log"
-	"os"
-	"strings"
+	"google.golang.org/api/spanner/v1"
 )
 
-type PubSubMessage struct {
-	Data []byte `json:"data"`
-}
+var (
+	cfg                 Config
+	dataflowService     *dataflow.Service
+	spannerService      *spanner.Service
+	ignoreDatabaseRegex *regexp.Regexp
+)
 
-func SpannerBackupTrigger(ctx context.Context, m PubSubMessage) error {
-	_ = string(m.Data)
-
-	var (
-		projectID = os.Getenv("PROJECT_ID")
-		jobName = os.Getenv("JOB_NAME")
-		jobLocation = os.Getenv("JOB_LOCATION")
-		spannerInstanceID = os.Getenv("INSTANCE_ID")
-		spannerDatabaseIDS = os.Getenv("DATABASE_IDS") // comma-separated databaseIDs
-		backupOutputDir = os.Getenv("OUTPUT_DIR")
-	)
-
-	if projectID == "" ||
-		jobName == "" ||
-		jobLocation == "" ||
-		spannerInstanceID == "" ||
-		spannerDatabaseIDS == "" ||
-		backupOutputDir == "" {
-		log.Fatalf("param is not set. '%s', '%s', '%s', '%s', '%s', '%s'", projectID, jobName, jobLocation, spannerInstanceID, spannerDatabaseIDS, backupOutputDir)
+func init() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalf("Error loading .env file. err: %+v", err)
+	}
+	err = envconfig.Process("", &cfg)
+	if err != nil {
+		log.Fatalf("Error loading envvals. err: %+v", err)
 	}
 
-
-	// API doc: https://cloud.google.com/dataflow/docs/reference/rest/
-	service, err := dataflow.NewService(oauth2.NoContext)
+	s, err := dataflow.NewService(oauth2.NoContext)
 	if err != nil {
 		log.Fatalf("err: %+v", err)
 	}
+	dataflowService = s
 
-	for _, spannerDatabaseID := range strings.Split(spannerDatabaseIDS, ",") {
-		// Template docs:
-		// https://cloud.google.com/dataflow/docs/guides/templates/provided-batch#cloudspannertogcsavro
-		// https://github.com/GoogleCloudPlatform/DataflowTemplates/tree/master/src/main/java/com/google/cloud/teleport/templates
-		job, err := dataflow.NewProjectsLocationsTemplatesService(service).Create(projectID, jobLocation, &dataflow.CreateJobFromTemplateRequest{
-			GcsPath: "gs://dataflow-templates/latest/Cloud_Spanner_to_GCS_Avro",
-			JobName: jobName + "-" + spannerDatabaseID,
-			Parameters: map[string]string{ // parameter names are camel-case
-				"instanceId": spannerInstanceID,
-				"databaseId": spannerDatabaseID,
-				"outputDir":  backupOutputDir,
-			},
-		}).Do()
+	ss, err := spanner.NewService(context.Background())
+	if err != nil {
+		log.Fatalf("err: %+v", err)
+	}
+	spannerService = ss
 
-		if err != nil {
-			log.Printf("backup job error: %+v", err)
-			continue
-		}
-		log.Printf("job is successfully started. job: %+v", job)
+	ignoreDatabaseRegex = regexp.MustCompile(cfg.IgnoreDatabaseRegex)
+	if cfg.IgnoreDatabaseRegex == "" {
+		ignoreDatabaseRegex = regexp.MustCompile(`0^`) // match nothing
+	}
+}
+
+type Config struct {
+	ProjectID           string `envconfig:"PROJECT_ID" required:"true"`
+	JobNamePrefix       string `envconfig:"JOB_NAME_PREFIX" required:"true"`
+	JobLocation         string `envconfig:"JOB_LOCATION" required:"true"`
+	InstanceID          string `envconfig:"INSTANCE_ID" required:"true"`
+	OutputBucketName    string `envconfig:"OUTPUT_BUCKET_NAME" required:"true"`
+	IgnoreDatabaseRegex string `envconfig:"IGNORE_DATABASE_REGEX"`
+}
+
+type PubSubMessage struct {
+	Message struct {
+		Data []byte `json:"data,omitempty"`
+		ID   string `json:"id"`
+	} `json:"message"`
+	Subscription string `json:"subscription"`
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	_ := r.Body // discard request body
+
+	targetDatabaseIDs, err := spannerutil.ListTargetDatabases(spannerService, ignoreDatabaseRegex)
+	if err != nil {
+		logger.Error(err.Error(), zap.Error(err))
+		return
 	}
 
-	return nil
+	// api doc: https://cloud.google.com/dataflow/docs/reference/rest/
+	// template doc: https://cloud.google.com/dataflow/docs/guides/templates/provided-batch#cloudspannertogcsavro
+	for _, databaseID := range targetDatabaseIDs {
+		job, err := dataflowutil.ExecuteSpannerBackupJob(dataflowService, cfg.ProjectID, cfg.JobLocation, cfg.JobNamePrefix, cfg.InstanceID, databaseID, cfg.OutputBucketName)
+		if err != nil {
+			logger.Error(err.Error(), zap.Error(err))
+			continue
+		}
+		logger.Info("job is successfully started", zap.Any("jon", job))
+	}
+
+	return
+}
+
+func main() {
+	http.HandleFunc("/", handler)
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 }
