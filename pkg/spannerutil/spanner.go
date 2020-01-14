@@ -27,15 +27,15 @@ func ListAllDatabases(service *spanner.Service, projectID, instanceID string) ([
 	return databases, nil
 }
 
-func ListTargetDatabases(service *spanner.Service, ignoreDatabasesRegex *regexp.Regexp) ([]string, error) {
-	databases, err := ListAllDatabases(service)
+func ListDatabaseIDsWithFilter(service *spanner.Service, projectID, instanceID string, ignoreDatabasesRegex *regexp.Regexp) ([]string, error) {
+	databases, err := ListAllDatabases(service, projectID, instanceID)
 	if err != nil {
 		return nil, err
 	}
 	res := make([]string, 0, len(databases))
 	for _, v := range databases {
-		dbName := strings.Split(v.Name, "/")[6] // form: `projects/<project>/instances/<instance>/databases/<database>`
-		if ignoreDatabasesRegex.MatchString(dbName) {
+		dbName := strings.Split(v.Name, "/")[5] // form: `projects/<project>/instances/<instance>/databases/<database>`
+		if !ignoreDatabasesRegex.MatchString(dbName) {
 			res = append(res, dbName)
 		}
 	}
